@@ -1,0 +1,79 @@
+name : last nest deploy
+
+on :
+  push :
+    branches :
+      - main
+
+jobs :
+  build :
+    runs-on : ubuntu-latest
+
+    steps :
+      - name : checkout
+        uses : actions/checkout@v4
+
+      - name : set up node
+        uses : actions/setup-node@v4
+        with :
+          node-version : '20' # "node-version" 이게 있으면 "npm audit fix || true" 버전을 지정해줬기 때문에 의존성 유연하게 해주는 기능이 필요가 없음
+
+      # - name : create .env
+      #   run  : |
+      #     "${{ secrets.MY_KEY }}" > .env
+
+      - name : npm install # 의존성 설치 / "npm audit fix || true" : 보안 취약점을 자동으로 유연하게 수정해서 실패해도 일단 빌드 진행 하면서 의존성 유연하게 설치
+        run  : |
+          npm install
+
+      - name : build NestJS
+        run  : |
+          npm run build
+
+      - name : build output # 빌드가 잘 되었는지 모니터링 / "ls -la dist" : dist 폴더 안의 내용을 상세하게 출력, pwd 현재 작업 경로 출력
+        run  : |
+          ls -la dist
+          pwd
+
+      - name : Upload build artifacts # 빌드 준비 단계 업로드 하기 전 단계
+        uses : actions/upload-artifact@v4
+        with :
+          name : build-artifacts
+          path : dist/ # 경로
+
+      - name : install ssh key
+        run  : |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.AWS_SECRET_KEY }}" > ~/.ssh/aws_key
+          chmod 600 ~/.ssh/aws_key
+          ssh-keyscan -H ${{ secrets.HOST }} >> ~/.ssh/known_hosts
+          cat ~/.ssh/known_hosts
+
+      - name : EC2 deploy
+        uses : appleboy/ssh-action@v1.0.3
+        with :
+          host : ${{ secrets.HOST }}
+          username : ${{ secrets.USERNAME }}
+          key : ${{ secrets.AWS_SECRET_KEY }}
+          port : ${{ secrets.PORT }}
+          script : | # 실행할 스크립트 / | => 줄 내림 기호
+            cd /home/ubuntu
+            rm -rf dist
+            mkdir dist
+
+      - name : EC2에 아티팩트 내용 복사
+        run  : |
+          ls
+          pwd
+          scp -r -i ~/.ssh/aws_key ./dist/* ${{ secrets.USERNAME }}@${{ secrets.HOST }}:/home/ubuntu/dist/
+
+      - name : deploy to EC2
+        uses : appleboy/ssh-action@v1.0.3
+        with :
+          host : ${{ secrets.HOST }}
+          username : ${{ secrets.USERNAME }}
+          key : ${{ secrets.AWS_SECRET_KEY }}
+          port : ${{ secrets.PORT }}
+          script : |
+            cd /home/ubuntu
+            pm2 reload system.config.js --env production
